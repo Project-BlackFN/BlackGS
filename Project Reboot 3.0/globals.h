@@ -9,7 +9,7 @@ namespace Globals
 	extern inline bool bCreative = false;
 	extern inline bool bGoingToPlayEvent = false;
 	extern inline bool bEnableAGIDs = true;
-	extern inline bool bNoMCP = true;
+	extern inline bool bNoMCP = false;
 	extern inline bool bLogProcessEvent = false;
 	// extern inline bool bLateGame = false;
 	extern inline std::atomic<bool> bLateGame(false);
@@ -21,9 +21,9 @@ namespace Globals
 	extern inline bool bHitReadyToStartMatch = false;
 	extern inline bool bInitializedPlaylist = false;
 	extern inline bool bStartedListening = false;
-	extern inline bool bAutoRestart = false; // doesnt work fyi
+	extern inline bool bAutoRestart = true; // doesnt work fyi
 	extern inline bool bFillVendingMachines = true;
-	extern inline bool bPrivateIPsAreOperator = true;
+	extern inline bool bPrivateIPsAreOperator = false;
 	extern inline int AmountOfListens = 0; // TODO: Switch to this for LastNum
 	extern inline bool bDeveloperMode = false;
 }
@@ -43,3 +43,10 @@ extern inline std::string PlaylistName =
 // "/Game/Athena/Playlists/Ashton/Playlist_Ashton_Sm.Playlist_Ashton_Sm";
 // "/Game/Athena/Playlists/BattleLab/Playlist_BattleLab.Playlist_BattleLab";
 // "/MoleGame/Playlists/Playlist_MoleGame.Playlist_MoleGame"; // very experimental dont use
+
+
+
+inline void SetPlaylistNameX(const std::string& newName)
+{
+	PlaylistName = newName;
+}

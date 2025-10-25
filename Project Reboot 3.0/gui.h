@@ -46,6 +46,7 @@
 #include "die.h"
 #include "calendar.h"
 #include "KismetRenderingLibrary.h"
+#include "BetterMomentum.h"
 
 #define GAME_TAB 1
 #define PLAYERS_TAB 2
@@ -81,7 +82,7 @@ extern inline int SecondsUntilTravel = 5;
 extern inline bool bSwitchedInitialLevel = false;
 extern inline bool bIsInAutoRestart = false;
 extern inline float AutoBusStartSeconds = 60;
-extern inline int NumRequiredPlayersToStart = 2;
+extern inline int NumRequiredPlayersToStart = 3;
 extern inline bool bDebugPrintLooting = false;
 extern inline bool bDebugPrintFloorLoot = false;
 extern inline bool bDebugPrintSwapping = false;
@@ -119,27 +120,57 @@ static inline bool HasAnyCalendarModification()
 	return Calendar::HasSnowModification() || Calendar::HasNYE() || Fortnite_Version == 8.40 || std::floor(Fortnite_Version) == 13;
 }
 
-static inline void Restart() // todo move?
+static inline void Restart()
 {
+	LOG_INFO(LogDev, "Restart() called");
 	InitBotNames();
 
+	// it was formatted like this for debugging purposes..
 	FString LevelA = Engine_Version < 424
-		? L"open Athena_Terrain" : Engine_Version >= 500 ? Fortnite_Version >= 23
-		? L"open Asteria_Terrain"
-		: Globals::bCreative ? L"open Creative_NoApollo_Terrain"
-		: L"open Artemis_Terrain"
-		: Globals::bCreative ? L"open Creative_NoApollo_Terrain"
-		: L"open Apollo_Terrain";
+		? TEXT("open Athena_Terrain")
+		: Engine_Version >= 500
+		? (Fortnite_Version >= 23
+			? TEXT("open Asteria_Terrain")
+			: Globals::bCreative ? TEXT("open Creative_NoApollo_Terrain") : TEXT("open Artemis_Terrain"))
+		: Globals::bCreative ? TEXT("open Creative_NoApollo_Terrain") : TEXT("open Apollo_Terrain");
 
-	static auto BeaconClass = FindObject<UClass>(L"/Script/FortniteGame.FortOnlineBeaconHost");
-	auto AllFortBeacons = UGameplayStatics::GetAllActorsOfClass(GetWorld(), BeaconClass);
-
-	for (int i = 0; i < AllFortBeacons.Num(); ++i)
+	auto BeaconClass = FindObject<UClass>(TEXT("/Script/FortniteGame.FortOnlineBeaconHost"));
+	if (!BeaconClass)
 	{
-		AllFortBeacons.at(i)->K2_DestroyActor();
+		return;
 	}
 
-	AllFortBeacons.Free();
+	// im going to tweak
+	while (true)
+	{
+		UWorld* World = GetWorld();
+		if (!World)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			continue;
+		}
+
+		TArray<AActor*> AllFortBeacons = UGameplayStatics::GetAllActorsOfClass(World, BeaconClass);
+		int32 NumBeacons = AllFortBeacons.Num();
+		if (NumBeacons == 0)
+		{
+			break;
+		}
+
+		// this is held on by hopes and prayers dude
+		for (int i = 0; i < NumBeacons; ++i)
+		{
+			AActor* Beacon = AllFortBeacons.at(i);
+			if (Beacon && !Beacon->IsPendingKillPending())
+			{
+				Beacon->K2_DestroyActor();
+			}
+
+			Beacon = NULL;
+		}
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	}
 
 	Globals::bInitializedPlaylist = false;
 	Globals::bStartedListening = false;
@@ -147,28 +178,35 @@ static inline void Restart() // todo move?
 	bStartedBus = false;
 	AmountOfRestarts++;
 
-	LOG_INFO(LogDev, "Switching!");
-
-	if (Fortnite_Version >= 3) // idk what ver
+	while (true)
 	{
-		((AGameMode*)GetWorld()->GetGameMode())->RestartGame();
+		UWorld* World = GetWorld();
+		if (!World)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			continue;
+		}
+
+		if (Fortnite_Version >= 3)
+		{
+			AGameMode* GameMode = ((AGameMode*)World->GetGameMode());
+			if (GameMode)
+			{
+				GameMode->RestartGame();
+				break;
+			}
+		}
+		else
+		{
+			if (LevelA.IsValid())
+			{
+				UKismetSystemLibrary::ExecuteConsoleCommand(World, LevelA, nullptr);
+				break;
+			}
+		}
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	}
-	else
-	{
-		UKismetSystemLibrary::ExecuteConsoleCommand(GetWorld(), LevelA, nullptr);
-	}
-
-	/*
-
-	auto& LevelCollections = GetWorld()->Get<TArray<__int64>>("LevelCollections");
-	int LevelCollectionSize = FindObject<UStruct>("/Script/Engine.LevelCollection")->GetPropertiesSize();
-
-	*(UNetDriver**)(__int64(LevelCollections.AtPtr(0, LevelCollectionSize)) + 0x10) = nullptr;
-	*(UNetDriver**)(__int64(LevelCollections.AtPtr(1, LevelCollectionSize)) + 0x10) = nullptr;
-
-	*/
-
-	// UGameplayStatics::OpenLevel(GetWorld(), UKismetStringLibrary::Conv_StringToName(LevelA), true, FString());
 }
 
 static inline std::string wstring_to_utf8(const std::wstring& str)
@@ -827,6 +865,10 @@ static inline void MainUI()
 						{
 							bStartedBus = true;
 
+							SetJoinState(false);
+
+							StopCount();
+
 							auto GameMode = (AFortGameModeAthena*)GetWorld()->GetGameMode();
 							auto GameState = Cast<AFortGameStateAthena>(GameMode->GetGameState());
 
@@ -869,6 +911,10 @@ static inline void MainUI()
 
 							// GameState->Get<float>(WarmupCountdownStartTimeOffset) = TimeSeconds;
 							GameMode->Get<float>(WarmupEarlyCountdownDurationOffset) = EarlyDuration;
+
+							SetJoinState(false);
+
+							StopCount();
 						}
 					}
 				}
@@ -1530,6 +1576,7 @@ static inline void PregameUI()
 	ImGui::SliderInt("Players required to start the match", &WarmupRequiredPlayerCount, 1, 100);
 		
 	if (!Globals::bCreative)
+		GetRequiredPlaylist();
 		ImGui::InputText("Playlist", &PlaylistName);
 }
 

@@ -24,6 +24,7 @@
 #include "gui.h"
 #include "FortAthenaMutator_InventoryOverride.h"
 #include "FortAthenaMutator_TDM.h"
+#include "BetterMomentum.h"
 
 void AFortPlayerController::ClientReportDamagedResourceBuilding(ABuildingSMActor* BuildingSMActor, EFortResourceType PotentialResourceType, int PotentialResourceCount, bool bDestroyed, bool bJustHitWeakspot)
 {
@@ -1289,179 +1290,272 @@ DWORD WINAPI RestartThread(LPVOID)
 	return 0;
 }
 
+void ShutdownAfter40Sec()
+{
+
+	std::thread([]() {
+
+		std::this_thread::sleep_for(std::chrono::seconds(40));
+
+		std::exit(0);
+		}).detach();
+}
+
 void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerController, void* DeathReport)
 {
+	LOG_INFO(LogDev, "=== ClientOnPawnDiedHook START ===");
+	LOG_INFO(LogDev, "PlayerController: {}", __int64(PlayerController));
+	LOG_INFO(LogDev, "DeathReport: {}", __int64(DeathReport));
+
 	auto GameState = Cast<AFortGameStateAthena>(((AFortGameMode*)GetWorld()->GetGameMode())->GetGameState());
 	auto DeadPawn = Cast<AFortPlayerPawn>(PlayerController->GetPawn());
 	auto DeadPlayerState = Cast<AFortPlayerStateAthena>(PlayerController->GetPlayerState());
 	auto KillerPawn = Cast<AFortPlayerPawn>(*(AFortPawn**)(__int64(DeathReport) + MemberOffsets::DeathReport::KillerPawn));
 	auto KillerPlayerState = Cast<AFortPlayerStateAthena>(*(AFortPlayerState**)(__int64(DeathReport) + MemberOffsets::DeathReport::KillerPlayerState));
 
+	LOG_INFO(LogDev, "GameState: {}", __int64(GameState));
+	LOG_INFO(LogDev, "DeadPawn: {}", __int64(DeadPawn));
+	LOG_INFO(LogDev, "DeadPlayerState: {}", __int64(DeadPlayerState));
+	LOG_INFO(LogDev, "KillerPawn: {}", __int64(KillerPawn));
+	LOG_INFO(LogDev, "KillerPlayerState: {}", __int64(KillerPlayerState));
+
 	if (!DeadPawn || !GameState || !DeadPlayerState)
+	{
+		LOG_INFO(LogDev, "Early return: Missing critical actors");
 		return ClientOnPawnDiedOriginal(PlayerController, DeathReport);
+	}
 
 	auto DeathLocation = DeadPawn->GetActorLocation();
+	LOG_INFO(LogDev, "DeathLocation: X={}, Y={}, Z={}", DeathLocation.X, DeathLocation.Y, DeathLocation.Z);
 
 	static auto FallDamageEnumValue = 1;
-
 	uint8_t DeathCause = 0;
 
 	if (Fortnite_Version > 1.8 || Fortnite_Version == 1.11)
 	{
-		auto DeathInfo = DeadPlayerState->GetDeathInfo(); // Alloc<void>(DeathInfoStructSize);
+		LOG_INFO(LogDev, "Processing DeathInfo (Version > 1.8 or == 1.11)");
+
+		auto DeathInfo = DeadPlayerState->GetDeathInfo();
+		LOG_INFO(LogDev, "DeathInfo pointer: {}", __int64(DeathInfo));
+
 		DeadPlayerState->ClearDeathInfo();
+		LOG_INFO(LogDev, "DeathInfo cleared");
 
-		auto/*&*/ Tags = MemberOffsets::FortPlayerPawn::CorrectTags == 0 ? FGameplayTagContainer()
+		auto Tags = MemberOffsets::FortPlayerPawn::CorrectTags == 0 ? FGameplayTagContainer()
 			: DeadPawn->Get<FGameplayTagContainer>(MemberOffsets::FortPlayerPawn::CorrectTags);
-		// *(FGameplayTagContainer*)(__int64(DeathReport) + MemberOffsets::DeathReport::Tags);
 
-		// LOG_INFO(LogDev, "Tags: {}", Tags.ToStringSimple(true));
+		LOG_INFO(LogDev, "Tags retrieved: {}", Tags.ToStringSimple(true));
+		LOG_INFO(LogDev, "Tags.GameplayTags.Num(): {}", Tags.GameplayTags.Num());
+		LOG_INFO(LogDev, "Tags.ParentTags.Num(): {}", Tags.ParentTags.Num());
 
-		DeathCause = ToDeathCause(Tags, false, DeadPawn); // DeadPawn->IsDBNO() ??
+		DeathCause = ToDeathCause(Tags, false, DeadPawn);
+		LOG_INFO(LogDev, "DeathCause calculated: {}", (int)DeathCause);
+		LOG_INFO(LogDev, "DeadPawn->IsDBNO(): {}", DeadPawn->IsDBNO());
 
+		// Copy tags
 		FGameplayTagContainer CopyTags;
-
 		for (int i = 0; i < Tags.GameplayTags.Num(); ++i)
 		{
 			CopyTags.GameplayTags.Add(Tags.GameplayTags.at(i));
 		}
-
 		for (int i = 0; i < Tags.ParentTags.Num(); ++i)
 		{
 			CopyTags.ParentTags.Add(Tags.ParentTags.at(i));
 		}
+		LOG_INFO(LogDev, "Tags copied - GameplayTags: {}, ParentTags: {}", CopyTags.GameplayTags.Num(), CopyTags.ParentTags.Num());
 
-		LOG_INFO(LogDev, "DeathCause: {}", (int)DeathCause);
-		LOG_INFO(LogDev, "DeadPawn->IsDBNO(): {}", DeadPawn->IsDBNO());
-		LOG_INFO(LogDev, "KillerPlayerState: {}", __int64(KillerPlayerState));
-
+		// Set DeathInfo fields
 		*(bool*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::bDBNO) = DeadPawn->IsDBNO();
-		*(uint8*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::DeathCause) = DeathCause;
+		LOG_INFO(LogDev, "Set bDBNO in DeathInfo");
 
-		auto FinisherOrDowner = KillerPlayerState ? KillerPlayerState : DeadPlayerState;;
+		*(uint8*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::DeathCause) = DeathCause;
+		LOG_INFO(LogDev, "Set DeathCause in DeathInfo");
+
+		auto FinisherOrDowner = KillerPlayerState ? KillerPlayerState : DeadPlayerState;
+		LOG_INFO(LogDev, "FinisherOrDowner: {}", __int64(FinisherOrDowner));
 
 		if (MemberOffsets::DeathInfo::bIsWeakFinisherOrDowner)
 		{
+			LOG_INFO(LogDev, "Using weak pointer for FinisherOrDowner");
 			TWeakObjectPtr<AActor> WeakFinisherOrDowner{};
 			WeakFinisherOrDowner.ObjectIndex = FinisherOrDowner->InternalIndex;
 			WeakFinisherOrDowner.ObjectSerialNumber = GetItemByIndex(FinisherOrDowner->InternalIndex)->SerialNumber;
+			LOG_INFO(LogDev, "WeakPtr - ObjectIndex: {}, SerialNumber: {}", WeakFinisherOrDowner.ObjectIndex, WeakFinisherOrDowner.ObjectSerialNumber);
 		}
 		else
+		{
 			*(AActor**)(__int64(DeathInfo) + MemberOffsets::DeathInfo::FinisherOrDowner) = FinisherOrDowner;
+			LOG_INFO(LogDev, "Set raw pointer for FinisherOrDowner");
+		}
 
 		if (MemberOffsets::DeathInfo::DeathLocation != -1)
+		{
 			*(FVector*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::DeathLocation) = DeathLocation;
+			LOG_INFO(LogDev, "Set DeathLocation in DeathInfo");
+		}
 
 		if (MemberOffsets::DeathInfo::DeathTags != -1)
+		{
 			*(FGameplayTagContainer*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::DeathTags) = CopyTags;
+			LOG_INFO(LogDev, "Set DeathTags in DeathInfo");
+		}
 
 		if (MemberOffsets::DeathInfo::bInitialized != -1)
+		{
 			*(bool*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::bInitialized) = true;
+			LOG_INFO(LogDev, "Set bInitialized in DeathInfo");
+		}
 
+		// Distance calculation
 		if (DeathCause == FallDamageEnumValue)
 		{
 			if (MemberOffsets::FortPlayerPawnAthena::LastFallDistance != -1)
-				*(float*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::Distance) = DeadPawn->Get<float>(MemberOffsets::FortPlayerPawnAthena::LastFallDistance);
+			{
+				float fallDist = DeadPawn->Get<float>(MemberOffsets::FortPlayerPawnAthena::LastFallDistance);
+				*(float*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::Distance) = fallDist;
+				LOG_INFO(LogDev, "Set fall distance: {}", fallDist);
+			}
 		}
 		else
 		{
 			if (MemberOffsets::DeathInfo::Distance != -1)
-				*(float*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::Distance) = KillerPawn ? KillerPawn->GetDistanceTo(DeadPawn) : 0;
+			{
+				float distance = KillerPawn ? KillerPawn->GetDistanceTo(DeadPawn) : 0;
+				*(float*)(__int64(DeathInfo) + MemberOffsets::DeathInfo::Distance) = distance;
+				LOG_INFO(LogDev, "Set kill distance: {}", distance);
+			}
 		}
 
 		if (MemberOffsets::FortPlayerState::PawnDeathLocation != -1)
-			DeadPlayerState->Get<FVector>(MemberOffsets::FortPlayerState::PawnDeathLocation) = DeathLocation;
-
-		static auto OnRep_DeathInfoFn = FindObject<UFunction>(L"/Script/FortniteGame.FortPlayerStateAthena.OnRep_DeathInfo");
-
-		if (OnRep_DeathInfoFn)
 		{
-			DeadPlayerState->ProcessEvent(OnRep_DeathInfoFn);
+			DeadPlayerState->Get<FVector>(MemberOffsets::FortPlayerState::PawnDeathLocation) = DeathLocation;
+			LOG_INFO(LogDev, "Set PawnDeathLocation in PlayerState");
 		}
 
+		// OnRep_DeathInfo
+		static auto OnRep_DeathInfoFn = FindObject<UFunction>(L"/Script/FortniteGame.FortPlayerStateAthena.OnRep_DeathInfo");
+		if (OnRep_DeathInfoFn)
+		{
+			LOG_INFO(LogDev, "Calling OnRep_DeathInfo");
+			DeadPlayerState->ProcessEvent(OnRep_DeathInfoFn);
+			LOG_INFO(LogDev, "OnRep_DeathInfo completed");
+		}
+		else
+		{
+			LOG_INFO(LogDev, "WARNING: OnRep_DeathInfoFn not found!");
+		}
+
+		// Handle killer stats and siphon
 		if (KillerPlayerState && KillerPlayerState != DeadPlayerState)
 		{
+			LOG_INFO(LogDev, "Processing killer stats (different from dead player)");
+
 			if (MemberOffsets::FortPlayerStateAthena::KillScore != -1)
+			{
+				int oldKills = KillerPlayerState->Get<int>(MemberOffsets::FortPlayerStateAthena::KillScore);
 				KillerPlayerState->Get<int>(MemberOffsets::FortPlayerStateAthena::KillScore)++;
+				LOG_INFO(LogDev, "KillScore: {} -> {}", oldKills, oldKills + 1);
+			}
 
 			if (MemberOffsets::FortPlayerStateAthena::TeamKillScore != -1)
+			{
+				int oldTeamKills = KillerPlayerState->Get<int>(MemberOffsets::FortPlayerStateAthena::TeamKillScore);
 				KillerPlayerState->Get<int>(MemberOffsets::FortPlayerStateAthena::TeamKillScore)++;
+				LOG_INFO(LogDev, "TeamKillScore: {} -> {}", oldTeamKills, oldTeamKills + 1);
+			}
 
 			KillerPlayerState->ClientReportKill(DeadPlayerState);
+			LOG_INFO(LogDev, "ClientReportKill called");
 
-			// KillerPlayerState->OnRep_Kills();
-
+			// Health siphon
 			if (AmountOfHealthSiphon > 0)
 			{
+				LOG_INFO(LogDev, "Processing health siphon (Amount: {})", AmountOfHealthSiphon);
+
 				auto KillerAbilityComp = KillerPlayerState->GetAbilitySystemComponent();
+				LOG_INFO(LogDev, "KillerAbilityComp: {}", __int64(KillerAbilityComp));
 
 				if (KillerAbilityComp)
 				{
 					auto ActivatableAbilities = KillerAbilityComp->GetActivatableAbilities();
 					auto& Items = ActivatableAbilities->GetItems();
+					LOG_INFO(LogDev, "Searching for Siphon ability in {} abilities", Items.Num());
+
 					for (size_t i = 0; i < Items.Num(); ++i)
 					{
 						auto& Item = Items.At(i, FGameplayAbilitySpec::GetStructSize());
 						auto Ability = Item.GetAbility();
-						if (Ability && Ability->ClassPrivate && Ability->ClassPrivate->GetName().contains("Siphon"))
+
+						if (Ability && Ability->ClassPrivate)
 						{
-							FGameplayTag Tag{};
-							Tag.TagName = UKismetStringLibrary::Conv_StringToName(TEXT("GameplayCue.Shield.PotionConsumed"));
+							auto abilityName = Ability->ClassPrivate->GetName();
+							if (abilityName.contains("Siphon"))
+							{
+								LOG_INFO(LogDev, "Found Siphon ability: {}", abilityName);
 
-							auto NetMulticast_InvokeGameplayCueAdded = FindObject<UFunction>(L"/Script/GameplayAbilities.AbilitySystemComponent.NetMulticast_InvokeGameplayCueAdded");
-							auto NetMulticast_InvokeGameplayCueExecuted = FindObject<UFunction>(L"/Script/GameplayAbilities.AbilitySystemComponent.NetMulticast_InvokeGameplayCueExecuted");
+								FGameplayTag Tag{};
+								Tag.TagName = UKismetStringLibrary::Conv_StringToName(TEXT("GameplayCue.Shield.PotionConsumed"));
 
-							if (!NetMulticast_InvokeGameplayCueAdded || !NetMulticast_InvokeGameplayCueExecuted)
+								auto NetMulticast_InvokeGameplayCueAdded = FindObject<UFunction>(L"/Script/GameplayAbilities.AbilitySystemComponent.NetMulticast_InvokeGameplayCueAdded");
+								auto NetMulticast_InvokeGameplayCueExecuted = FindObject<UFunction>(L"/Script/GameplayAbilities.AbilitySystemComponent.NetMulticast_InvokeGameplayCueExecuted");
+
+								if (!NetMulticast_InvokeGameplayCueAdded || !NetMulticast_InvokeGameplayCueExecuted)
+								{
+									LOG_INFO(LogDev, "WARNING: GameplayCue functions not found!");
+									break;
+								}
+
+								static auto GameplayCueTagOffsetAdded = NetMulticast_InvokeGameplayCueAdded->GetOffsetFunc("GameplayCueTag");
+								static auto GameplayCueTagOffsetExecuted = NetMulticast_InvokeGameplayCueExecuted->GetOffsetFunc("GameplayCueTag");
+								static auto PredictionKeyOffsetAdded = NetMulticast_InvokeGameplayCueAdded->GetOffsetFunc("PredictionKey");
+
+								auto AddedParams = Alloc<void>(NetMulticast_InvokeGameplayCueAdded->GetPropertiesSize());
+								auto ExecutedParams = Alloc<void>(NetMulticast_InvokeGameplayCueExecuted->GetPropertiesSize());
+
+								if (!AddedParams || !ExecutedParams)
+								{
+									LOG_INFO(LogDev, "WARNING: Failed to allocate params!");
+									break;
+								}
+
+								*(FGameplayTag*)(int64(AddedParams) + GameplayCueTagOffsetAdded) = Tag;
+								*(FGameplayTag*)(int64(ExecutedParams) + GameplayCueTagOffsetExecuted) = Tag;
+
+								KillerAbilityComp->ProcessEvent(NetMulticast_InvokeGameplayCueAdded, AddedParams);
+								KillerAbilityComp->ProcessEvent(NetMulticast_InvokeGameplayCueExecuted, ExecutedParams);
+								LOG_INFO(LogDev, "GameplayCue events invoked");
+
 								break;
-
-							static auto GameplayCueTagOffsetAdded = NetMulticast_InvokeGameplayCueAdded->GetOffsetFunc("GameplayCueTag");
-							static auto GameplayCueTagOffsetExecuted = NetMulticast_InvokeGameplayCueExecuted->GetOffsetFunc("GameplayCueTag");
-							static auto PredictionKeyOffsetAdded = NetMulticast_InvokeGameplayCueAdded->GetOffsetFunc("PredictionKey");
-
-							auto AddedParams = Alloc<void>(NetMulticast_InvokeGameplayCueAdded->GetPropertiesSize());
-							auto ExecutedParams = Alloc<void>(NetMulticast_InvokeGameplayCueExecuted->GetPropertiesSize());
-
-							if (!AddedParams || !ExecutedParams)
-								break;
-
-							*(FGameplayTag*)(int64(AddedParams) + GameplayCueTagOffsetAdded) = Tag;
-							*(FGameplayTag*)(int64(ExecutedParams) + GameplayCueTagOffsetExecuted) = Tag;
-							//(FPredictionKey*)(int64(AddedParams) + PredictionKeyOffsetAdded) = Tag;
-
-							KillerAbilityComp->ProcessEvent(NetMulticast_InvokeGameplayCueAdded, AddedParams);
-							KillerAbilityComp->ProcessEvent(NetMulticast_InvokeGameplayCueExecuted, ExecutedParams);
-
-							break;
+							}
 						}
 					}
 				}
 			}
 		}
 
-		// LOG_INFO(LogDev, "Reported kill.");
-
+		// Apply health siphon to killer pawn
 		if (AmountOfHealthSiphon > 0)
 		{
 			if (KillerPawn && KillerPawn != DeadPawn)
 			{
 				float Health = KillerPawn->GetHealth();
 				float Shield = KillerPawn->GetShield();
+				LOG_INFO(LogDev, "Killer stats before siphon - Health: {}, Shield: {}", Health, Shield);
 
 				int MaxHealth = 100;
 				int MaxShield = 100;
 				int AmountGiven = 0;
-				/*
-				int ShieldGiven = 0;
-				int HealthGiven = 0;
-				*/
 
+				// Give health first
 				if ((MaxHealth - Health) > 0)
 				{
 					int AmountToGive = MaxHealth - Health >= AmountOfHealthSiphon ? AmountOfHealthSiphon : MaxHealth - Health;
 					KillerPawn->SetHealth(Health + AmountToGive);
 					AmountGiven += AmountToGive;
+					LOG_INFO(LogDev, "Gave {} health (total given: {})", AmountToGive, AmountGiven);
 				}
 
+				// Give shield if needed
 				if ((MaxShield - Shield) > 0 && AmountGiven < AmountOfHealthSiphon)
 				{
 					int AmountToGive = MaxShield - Shield >= AmountOfHealthSiphon ? AmountOfHealthSiphon : MaxShield - Shield;
@@ -1471,18 +1565,19 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 					{
 						KillerPawn->SetShield(Shield + AmountToGive);
 						AmountGiven += AmountToGive;
+						LOG_INFO(LogDev, "Gave {} shield (total given: {})", AmountToGive, AmountGiven);
 					}
 				}
-				
-				if (AmountGiven > 0)
-				{
 
-				}
+				LOG_INFO(LogDev, "Siphon complete - Total given: {}", AmountGiven);
+				LOG_INFO(LogDev, "Killer stats after siphon - Health: {}, Shield: {}", KillerPawn->GetHealth(), KillerPawn->GetShield());
 			}
 		}
 	}
 
+	// Check respawn
 	bool bIsRespawningAllowed = GameState->IsRespawningAllowed(DeadPlayerState);
+	LOG_INFO(LogDev, "bIsRespawningAllowed: {}", bIsRespawningAllowed);
 
 	bool bDropInventory = true;
 
@@ -1493,43 +1588,52 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 				if (FortAthenaMutator_InventoryOverride->GetDropAllItemsOverride(DeadPlayerState->GetTeamIndex()) == EAthenaLootDropOverride::ForceKeep)
 				{
 					bDropInventory = false;
+					LOG_INFO(LogDev, "Mutator set bDropInventory to false");
 				}
 			}
 		}
 	);
 
-	if (bDropInventory
-		&& !bIsRespawningAllowed
-		)
+	LOG_INFO(LogDev, "bDropInventory: {}", bDropInventory);
+
+	// Drop inventory
+	if (bDropInventory && !bIsRespawningAllowed)
 	{
+		LOG_INFO(LogDev, "Processing inventory drop");
 		auto WorldInventory = PlayerController->GetWorldInventory();
+		LOG_INFO(LogDev, "WorldInventory: {}", __int64(WorldInventory));
 
 		if (WorldInventory)
 		{
 			auto& ItemInstances = WorldInventory->GetItemList().GetItemInstances();
+			LOG_INFO(LogDev, "ItemInstances count: {}", ItemInstances.Num());
 
 			std::vector<std::pair<FGuid, int>> GuidAndCountsToRemove;
 
 			for (int i = 0; i < ItemInstances.Num(); ++i)
 			{
 				auto ItemInstance = ItemInstances.at(i);
-
-				// LOG_INFO(LogDev, "[{}/{}] CurrentItemInstance {}", i, ItemInstances.Num(), __int64(ItemInstance));
+				LOG_INFO(LogDev, "[{}/{}] Processing ItemInstance: {}", i, ItemInstances.Num(), __int64(ItemInstance));
 
 				if (!ItemInstance)
+				{
+					LOG_INFO(LogDev, "[{}/{}] Skipping null ItemInstance", i, ItemInstances.Num());
 					continue;
+				}
 
 				auto ItemEntry = ItemInstance->GetItemEntry();
 				auto WorldItemDefinition = Cast<UFortWorldItemDefinition>(ItemEntry->GetItemDefinition());
 
-				// LOG_INFO(LogDev, "[{}/{}] WorldItemDefinition {}", i, ItemInstances.Num(), WorldItemDefinition ? WorldItemDefinition->GetFullName() : "InvalidObject");
-
 				if (!WorldItemDefinition)
+				{
+					LOG_INFO(LogDev, "[{}/{}] Skipping - no WorldItemDefinition", i, ItemInstances.Num());
 					continue;
+				}
 
-				auto ShouldBeDropped = WorldItemDefinition->CanBeDropped(); // WorldItemDefinition->ShouldDropOnDeath();
+				LOG_INFO(LogDev, "[{}/{}] Item: {}", i, ItemInstances.Num(), WorldItemDefinition->GetFullName());
 
-				// LOG_INFO(LogDev, "[{}/{}] ShouldBeDropped {}", i, ItemInstances.Num(), ShouldBeDropped);
+				auto ShouldBeDropped = WorldItemDefinition->CanBeDropped();
+				LOG_INFO(LogDev, "[{}/{}] ShouldBeDropped: {}", i, ItemInstances.Num(), ShouldBeDropped);
 
 				if (!ShouldBeDropped)
 					continue;
@@ -1542,31 +1646,36 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 				CreateData.Source = EFortPickupSpawnSource::GetPlayerEliminationValue();
 				CreateData.SpawnLocation = DeathLocation;
 
-				AFortPickup::SpawnPickup(CreateData);
+				auto Pickup = AFortPickup::SpawnPickup(CreateData);
+				LOG_INFO(LogDev, "[{}/{}] Spawned pickup: {}", i, ItemInstances.Num(), __int64(Pickup));
 
 				GuidAndCountsToRemove.push_back({ ItemEntry->GetItemGuid(), ItemEntry->GetCount() });
-				// WorldInventory->RemoveItem(ItemEntry->GetItemGuid(), nullptr, ItemEntry->GetCount());
 			}
 
+			LOG_INFO(LogDev, "Removing {} items from inventory", GuidAndCountsToRemove.size());
 			for (auto& Pair : GuidAndCountsToRemove)
 			{
 				WorldInventory->RemoveItem(Pair.first, nullptr, Pair.second, true);
 			}
 
 			WorldInventory->Update();
+			LOG_INFO(LogDev, "Inventory update complete");
 		}
 	}
 
+	// Handle death and game state
 	if (!bIsRespawningAllowed)
 	{
 		auto GameMode = Cast<AFortGameModeAthena>(GetWorld()->GetGameMode());
-
-		LOG_INFO(LogDev, "PlayersLeft: {} IsDBNO: {}", GameState->GetPlayersLeft(), DeadPawn->IsDBNO());
+		LOG_INFO(LogDev, "GameMode: {}", __int64(GameMode));
+		LOG_INFO(LogDev, "PlayersLeft: {}, IsDBNO: {}", GameState->GetPlayersLeft(), DeadPawn->IsDBNO());
 
 		if (!DeadPawn->IsDBNO())
 		{
 			if (bHandleDeath)
 			{
+				LOG_INFO(LogDev, "Handling death (bHandleDeath = true)");
+
 				if (Fortnite_Version > 1.8 || Fortnite_Version == 1.11)
 				{
 					static void (*RemoveFromAlivePlayers)(AFortGameModeAthena * GameMode, AFortPlayerController * PlayerController, APlayerState * PlayerState, APawn * FinisherPawn,
@@ -1574,6 +1683,8 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 						= decltype(RemoveFromAlivePlayers)(Addresses::RemoveFromAlivePlayers);
 
 					AActor* DamageCauser = *(AActor**)(__int64(DeathReport) + MemberOffsets::DeathReport::DamageCauser);
+					LOG_INFO(LogDev, "DamageCauser: {}", __int64(DamageCauser));
+
 					UFortWeaponItemDefinition* KillerWeaponDef = nullptr;
 
 					static auto FortProjectileBaseClass = FindObject<UClass>(L"/Script/FortniteGame.FortProjectileBase");
@@ -1583,114 +1694,116 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 						if (DamageCauser->IsA(FortProjectileBaseClass))
 						{
 							auto Owner = Cast<AFortWeapon>(DamageCauser->GetOwner());
-							KillerWeaponDef = Owner->IsValidLowLevel() ? Owner->GetWeaponData() : nullptr; // I just added the IsValidLowLevel check because what if the weapon destroys (idk)?
+							KillerWeaponDef = Owner->IsValidLowLevel() ? Owner->GetWeaponData() : nullptr;
+							LOG_INFO(LogDev, "DamageCauser is projectile, weapon: {}", __int64(KillerWeaponDef));
 						}
 						if (auto Weapon = Cast<AFortWeapon>(DamageCauser))
 						{
 							KillerWeaponDef = Weapon->GetWeaponData();
+							LOG_INFO(LogDev, "DamageCauser is weapon: {}", __int64(KillerWeaponDef));
 						}
 					}
 
+					LOG_INFO(LogDev, "Calling RemoveFromAlivePlayers");
 					RemoveFromAlivePlayers(GameMode, PlayerController, KillerPlayerState == DeadPlayerState ? nullptr : KillerPlayerState, KillerPawn, KillerWeaponDef, DeathCause, 0);
-
-					/*
-
-					// We need to check if their entire team is dead then I think we send it????
-
-					auto DeadControllerAthena = Cast<AFortPlayerControllerAthena>(PlayerController);
-
-					if (DeadControllerAthena && FAthenaMatchTeamStats::GetStruct())
-					{
-						auto MatchReport = DeadControllerAthena->GetMatchReport();
-
-						LOG_INFO(LogDev, "MatchReport: {}", __int64(MatchReport));
-
-						if (MatchReport)
-						{
-							MatchReport->GetTeamStats()->GetPlace() = DeadPlayerState->GetPlace();
-							MatchReport->GetTeamStats()->GetTotalPlayers() = AmountOfPlayersWhenBusStart; // hmm
-							MatchReport->HasTeamStats() = true;
-
-							DeadControllerAthena->ClientSendTeamStatsForPlayer(MatchReport->GetTeamStats());
-						}
-					}
-
-					*/
-
-					LOG_INFO(LogDev, "Removed!");
+					LOG_INFO(LogDev, "RemoveFromAlivePlayers completed");
 				}
 
-				// LOG_INFO(LogDev, "KillerPlayerState->Place: {}", KillerPlayerState ? KillerPlayerState->GetPlace() : -1);
-
-				LOG_INFO(LogDev, "TeamsLeft: {}", GameState->GetTeamsLeft()); // Important for launcher don't remove!
+				LOG_INFO(LogDev, "TeamsLeft: {}", GameState->GetTeamsLeft());
 			}
 		}
 
-		if (Fortnite_Version < 6) // Spectating (is this the actual build or is it like 6.10 when they added it auto).
+		// Spectating (early versions)
+		if (Fortnite_Version < 6)
 		{
 			if (GameState->GetGamePhase() > EAthenaGamePhase::Warmup)
 			{
 				static auto bAllowSpectateAfterDeathOffset = GameMode->GetOffset("bAllowSpectateAfterDeath");
 				bool bAllowSpectate = GameMode->Get<bool>(bAllowSpectateAfterDeathOffset);
-
 				LOG_INFO(LogDev, "bAllowSpectate: {}", bAllowSpectate);
 
 				if (bAllowSpectate)
 				{
-					LOG_INFO(LogDev, "Starting Spectating!");
-
+					LOG_INFO(LogDev, "Setting up spectating");
 					static auto PlayerToSpectateOnDeathOffset = PlayerController->GetOffset("PlayerToSpectateOnDeath");
 					PlayerController->Get<APawn*>(PlayerToSpectateOnDeathOffset) = KillerPawn;
-
-					UKismetSystemLibrary::K2_SetTimer(PlayerController, L"SpectateOnDeath", 5.f, false); // Soo proper its scary
+					UKismetSystemLibrary::K2_SetTimer(PlayerController, L"SpectateOnDeath", 5.f, false);
+					LOG_INFO(LogDev, "Spectating timer set");
 				}
 			}
 		}
 
-		if (Fortnite_Version >= 15) // dk if this is correct
+		// Set spectating state (later versions)
+		if (Fortnite_Version >= 15)
 		{
 			PlayerController->GetStateName() = UKismetStringLibrary::Conv_StringToName(L"Spectating");
+			LOG_INFO(LogDev, "Set player state to Spectating");
 		}
 
-		if (IsRestartingSupported() && Globals::bAutoRestart && !bIsInAutoRestart)
+		// Check win condition
+		if (GameState->GetGamePhase() > EAthenaGamePhase::Warmup)
 		{
-			// wht
+			int PlayersLeft = GameState->GetPlayersLeft();
+			int TeamsLeft = GameState->GetTeamsLeft();
 
-			if (GameState->GetGamePhase() > EAthenaGamePhase::Warmup)
+			LOG_INFO(LogDev, "Checking win condition - PlayersLeft: {}, TeamsLeft: {}", PlayersLeft, TeamsLeft);
+
+			// Win condition: Only 1 team/player remaining
+			bool bDidSomeoneWin = false;
+
+			if (TeamsLeft <= 1)
+			{
+				LOG_INFO(LogDev, "Win condition met! TeamsLeft: {}", TeamsLeft);
+				bDidSomeoneWin = true;
+			}
+			else if (PlayersLeft <= 1 && TeamsLeft <= 1)
+			{
+				LOG_INFO(LogDev, "Win condition met! PlayersLeft: {}", PlayersLeft);
+				bDidSomeoneWin = true;
+			}
+
+			// Additional validation: Check if any player has Place == 1
+			if (!bDidSomeoneWin)
 			{
 				auto AllPlayerStates = UGameplayStatics::GetAllActorsOfClass(GetWorld(), AFortPlayerStateAthena::StaticClass());
-
-				bool bDidSomeoneWin = AllPlayerStates.Num() == 0;
+				LOG_INFO(LogDev, "Checking places for {} PlayerStates", AllPlayerStates.Num());
 
 				for (int i = 0; i < AllPlayerStates.Num(); ++i)
 				{
 					auto CurrentPlayerState = (AFortPlayerStateAthena*)AllPlayerStates.at(i);
+					int place = CurrentPlayerState->GetPlace();
+					LOG_INFO(LogDev, "PlayerState[{}] place: {}", i, place);
 
-					if (CurrentPlayerState->GetPlace() <= 1)
+					if (place == 1)
 					{
 						bDidSomeoneWin = true;
+						LOG_INFO(LogDev, "Win condition met! PlayerState {} has winning place 1", i);
 						break;
 					}
 				}
+			}
 
-				// LOG_INFO(LogDev, "bDidSomeoneWin: {}", bDidSomeoneWin);
+			LOG_INFO(LogDev, "bDidSomeoneWin: {}", bDidSomeoneWin);
 
-				// if (GameState->GetGamePhase() == EAthenaGamePhase::EndGame)
-				if (bDidSomeoneWin)
-				{
-					CreateThread(0, 0, RestartThread, 0, 0, 0);
-				}
+			if (bDidSomeoneWin)
+			{
+				LOG_INFO(LogDev, "Game over - removing server and exiting");
+				RemoveServer();
+				ShutdownAfter40Sec();
 			}
 		}
 	}
 
+	// Bot cleanup
 	if (DeadPlayerState->IsBot())
 	{
-		// AllPlayerBotsToTick.remov3lbah
+		LOG_INFO(LogDev, "DeadPlayerState is bot - cleanup needed");
 	}
 
 	DeadPlayerState->EndDBNOAbilities();
+	LOG_INFO(LogDev, "EndDBNOAbilities called");
 
+	LOG_INFO(LogDev, "=== ClientOnPawnDiedHook END - Calling original ===");
 	return ClientOnPawnDiedOriginal(PlayerController, DeathReport);
 }
 

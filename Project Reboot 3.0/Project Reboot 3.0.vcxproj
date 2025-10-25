@@ -186,6 +186,7 @@
     <ClCompile Include="ActorComponent.cpp" />
     <ClCompile Include="addresses.cpp" />
     <ClCompile Include="AthenaMarkerComponent.cpp" />
+    <ClCompile Include="BetterMomentum.cpp" />
     <ClCompile Include="BP_IslandScripting.cpp" />
     <ClCompile Include="BuildingActor.cpp" />
     <ClCompile Include="BuildingContainer.cpp" />
@@ -298,6 +299,7 @@
     <ClInclude Include="AthenaPlayerMatchReport.h" />
     <ClInclude Include="AthenaResurrectionComponent.h" />
     <ClInclude Include="AttributeSet.h" />
+    <ClInclude Include="BetterMomentum.h" />
     <ClInclude Include="BGA.h" />
     <ClInclude Include="BinaryHeap.h" />
     <ClInclude Include="BitArray.h" />
@@ -480,6 +482,7 @@
     <ClInclude Include="ScriptDisassembler.h" />
     <ClInclude Include="ScriptInterface.h" />
     <ClInclude Include="Set.h" />
+    <ClInclude Include="settings.h" />
     <ClInclude Include="SharedPointer.h" />
     <ClInclude Include="SharedPointerInternals.h" />
     <ClInclude Include="SoftObjectPath.h" />

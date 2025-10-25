@@ -37,6 +37,7 @@
 #include <random>
 #include "TSubclassOf.h"
 #include "FortAthenaSupplyDrop.h"
+#include "BetterMomentum.h"
 
 static UFortPlaylistAthena* GetPlaylistToUse()
 {
@@ -187,10 +188,14 @@ void AFortGameModeAthena::StartAircraftPhase()
 	{
 		static void (*StartAircraftPhaseOriginal)(AFortGameModeAthena*, bool bDoNotSpawnAircraft) = decltype(StartAircraftPhaseOriginal)(Addresses::StartAircraftPhase);
 		StartAircraftPhaseOriginal(this, false); // love the double negative Fortnite
+		SetJoinState(false);
+		StopCount();
 	}
 	else
 	{
 		UKismetSystemLibrary::ExecuteConsoleCommand(GetWorld(), L"startaircraft", nullptr);
+		SetJoinState(false);
+		StopCount();
 	}
 }
 

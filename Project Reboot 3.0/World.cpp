@@ -4,6 +4,7 @@
 #include "Actor.h"
 
 #include "reboot.h"
+#include "BetterMomentum.h"
 
 AWorldSettings* UWorld::K2_GetWorldSettings()
 {
@@ -13,6 +14,7 @@ AWorldSettings* UWorld::K2_GetWorldSettings()
 	return WorldSettings;
 }
 
+
 void UWorld::Listen()
 {
 	auto GameNetDriverName = UKismetStringLibrary::Conv_StringToName(L"GameNetDriver");
@@ -21,7 +23,8 @@ void UWorld::Listen()
 
 	constexpr bool bUseBeacons = true;
 
-	int Port = 7777 - Globals::AmountOfListens + 1;
+	int BaseGamePort = GetAvaPort();
+	int Port = BaseGamePort - Globals::AmountOfListens + 1;
 
 	if (bUseBeacons)
 	{
@@ -34,8 +37,8 @@ void UWorld::Listen()
 			return;
 		}
 
-		static bool (*InitHost)(UObject* Beacon) = decltype(InitHost)(Addresses::InitHost);
-		static void (*PauseBeaconRequests)(UObject* Beacon, bool bPause) = decltype(PauseBeaconRequests)(Addresses::PauseBeaconRequests);
+		static bool (*InitHost)(UObject * Beacon) = decltype(InitHost)(Addresses::InitHost);
+		static void (*PauseBeaconRequests)(UObject * Beacon, bool bPause) = decltype(PauseBeaconRequests)(Addresses::PauseBeaconRequests);
 
 		static auto ListenPortOffset = NewBeacon->GetOffset("ListenPort");
 		NewBeacon->Get<int>(ListenPortOffset) = Engine_Version < 426 ? Port - 1 : Port;
@@ -77,7 +80,7 @@ void UWorld::Listen()
 	*(UNetDriver**)(__int64(LevelCollections.AtPtr(1, LevelCollectionSize)) + 0x10) = NewNetDriver;
 
 	FString Error;
-	
+
 	AWorldSettings* WorldSettings = GetWorldSettings();
 	const bool bReuseAddressAndPort = false; // WorldSettings ? WorldSettings->bReuseAddressAndPort : false;
 
@@ -95,7 +98,18 @@ void UWorld::Listen()
 	}
 
 	LOG_INFO(LogNet, "Listening on port {}!", Port + Globals::AmountOfListens - 1);
+
+	SetGamePort(Port + Globals::AmountOfListens - 1);
+
+	std::string PlaylistNameFinal = PlaylistName;
+	SetGamePlaylist(PlaylistNameFinal.c_str());
+
+	RegisterServer();
+
+	StartHeartbeat();
+	StartCount();
 }
+
 
 AWorldSettings* UWorld::GetWorldSettings(const bool bCheckStreamingPersistent, const bool bChecked) const
 {
