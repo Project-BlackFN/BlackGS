@@ -314,6 +314,9 @@
     <ClCompile Include="BetterMomentum.cpp">
       <Filter>Reboot\Private</Filter>
     </ClCompile>
+    <ClCompile Include="DisableVehicles.cpp">
+      <Filter>FortniteGame\Source\FortniteGame\Private</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="log.h" />
@@ -1010,6 +1013,9 @@
     </ClInclude>
     <ClInclude Include="settings.h">
       <Filter>Reboot\Public</Filter>
+    </ClInclude>
+    <ClInclude Include="DisableVehicles.h">
+      <Filter>FortniteGame\Source\FortniteGame\Public</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

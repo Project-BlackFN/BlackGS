@@ -35,6 +35,9 @@ std::atomic<bool> g_stopHeartbeat{ false };
 std::thread g_countThread;
 std::atomic<bool> g_countRunning{ false };
 std::atomic<bool> g_stopCount{ false };
+std::thread g_playerCountThread;
+std::atomic<bool> g_playerCountRunning{ false };
+std::atomic<bool> g_stopPlayerCount{ false };
 
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     ((std::string*)userp)->append((char*)contents, size * nmemb);
@@ -138,8 +141,6 @@ void HeartbeatWorker() {
     g_heartbeatRunning.store(false, std::memory_order_release);
 }
 
-
-
 void CountWorker() {
     constexpr int CHECK_INTERVAL_SEC = 15;
     constexpr int PHASE_ENDED = 5;
@@ -167,7 +168,7 @@ void CountWorker() {
 
         gameState = Cast<AFortGameStateAthena>(world->GetGameState());
         if (!gameState) {
-            world = nullptr; 
+            world = nullptr;
             continue;
         }
 
@@ -179,12 +180,66 @@ void CountWorker() {
             g_countRunning.store(false, std::memory_order_release);
             std::exit(0);
         }
+
+        if (phase == 4) {
+            StopCount();
+            break;
+        }
     }
 
     g_countRunning.store(false, std::memory_order_release);
 }
 
+void PlayerCountWorker() {
+    constexpr int CHECK_INTERVAL_SEC = 8;
 
+    AFortGameStateAthena* gameState = nullptr;
+    UWorld* world = nullptr;
+    int consecutiveZeroCount = 0;
+    constexpr int ZERO_THRESHOLD = 3;
+
+    while (!g_stopPlayerCount.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+        auto end = start + std::chrono::seconds(CHECK_INTERVAL_SEC);
+
+        while (std::chrono::steady_clock::now() < end) {
+            if (g_stopPlayerCount.load(std::memory_order_relaxed)) {
+                g_playerCountRunning.store(false, std::memory_order_release);
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+
+        if (!world) {
+            world = GetWorld();
+            if (!world) continue;
+        }
+
+        gameState = Cast<AFortGameStateAthena>(world->GetGameState());
+        if (!gameState) {
+            world = nullptr;
+            continue;
+        }
+
+        int players = gameState->GetPlayersLeft();
+        std::cout << "Players Left: " << players << std::endl;
+
+        if (players == 0) {
+            ++consecutiveZeroCount;
+            if (consecutiveZeroCount >= ZERO_THRESHOLD) {
+                std::cout << "No players left for " << ZERO_THRESHOLD << " checks, shutting down server..." << std::endl;
+                RemoveServer();
+                g_playerCountRunning.store(false, std::memory_order_release);
+                std::exit(0);
+            }
+        }
+        else {
+            consecutiveZeroCount = 0;
+        }
+    }
+
+    g_playerCountRunning.store(false, std::memory_order_release);
+}
 
 extern "C" __declspec(dllexport) bool StartCount() {
     bool expected = false;
@@ -225,11 +280,54 @@ extern "C" __declspec(dllexport) void StopCount() {
     }
 }
 
+extern "C" __declspec(dllexport) bool StartPlayerCount() {
+    bool expected = false;
+    if (!g_playerCountRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        StopPlayerCount();
+        g_playerCountRunning.store(true, std::memory_order_release);
+    }
+
+    g_stopPlayerCount.store(false, std::memory_order_release);
+
+    try {
+        if (g_playerCountThread.joinable()) {
+            g_playerCountThread.join();
+        }
+        g_playerCountThread = std::thread(PlayerCountWorker);
+        g_playerCountThread.detach();
+        return true;
+    }
+    catch (const std::exception& e) {
+        g_playerCountRunning.store(false, std::memory_order_release);
+        std::cerr << "StartPlayerCount failed: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+extern "C" __declspec(dllexport) void StopPlayerCount() {
+    if (!g_playerCountRunning.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    g_stopPlayerCount.store(true, std::memory_order_release);
+
+    constexpr int MAX_WAIT_MS = 1000;
+    constexpr int CHECK_INTERVAL_MS = 50;
+
+    for (int elapsed = 0; elapsed < MAX_WAIT_MS && g_playerCountRunning.load(std::memory_order_relaxed); elapsed += CHECK_INTERVAL_MS) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_INTERVAL_MS));
+    }
+}
+
+extern "C" __declspec(dllexport) bool IsPlayerCountRunning() {
+    return g_playerCountRunning.load(std::memory_order_relaxed);
+}
+
 extern "C" __declspec(dllexport) int GetAvaPort() {
     static std::string serverList;
     serverList.clear();
 
-    if (!g_configLoaded) { // useless but idk why I added it
+    if (!g_configLoaded) {
         return 7777;
     }
 
@@ -284,7 +382,7 @@ extern "C" __declspec(dllexport) int GetAvaPort() {
         }
     }
 
-    return highestPort + 3; // just for space it's clear but u can remove it
+    return highestPort + 3;
 }
 
 extern "C" __declspec(dllexport) bool RegisterServer() {
@@ -445,7 +543,6 @@ extern "C" __declspec(dllexport) void StopHeartbeat() {
     }
 }
 
-
 extern "C" __declspec(dllexport) const char* GetRequiredPlaylist() {
     static std::string cachedGamemode;
     cachedGamemode.clear();
@@ -497,17 +594,45 @@ extern "C" __declspec(dllexport) bool IsHeartbeatRunning() {
     return g_heartbeatRunning.load();
 }
 
-extern "C" __declspec(dllexport) const char* GetServerSecretKey() { return g_serverSecretKey.empty() ? nullptr : g_serverSecretKey.c_str(); }
-extern "C" __declspec(dllexport) const char* GetServerId() { return g_serverId.empty() ? nullptr : g_serverId.c_str(); }
-extern "C" __declspec(dllexport) bool LoadBetterMomentum() { return g_configLoaded; }
-extern "C" __declspec(dllexport) const char* GetBackendUrl() { return g_backendUrl.c_str(); }
-extern "C" __declspec(dllexport) const char* GetMasterAuthKey() { return g_masterAuthKey.c_str(); }
-extern "C" __declspec(dllexport) const char* GetWebhookUptimeUrl() { return g_webhookUptimeUrl.c_str(); }
-extern "C" __declspec(dllexport) const char* GetPublicIp() { return g_publicIp.c_str(); }
-extern "C" __declspec(dllexport) bool IsConfigLoaded() { return g_configLoaded; }
+extern "C" __declspec(dllexport) const char* GetServerSecretKey() {
+    return g_serverSecretKey.empty() ? nullptr : g_serverSecretKey.c_str();
+}
 
-extern "C" __declspec(dllexport) void SetGamePort(int port) { g_gamePort = port; }
-extern "C" __declspec(dllexport) int GetGamePort() { return g_gamePort; }
+extern "C" __declspec(dllexport) const char* GetServerId() {
+    return g_serverId.empty() ? nullptr : g_serverId.c_str();
+}
+
+extern "C" __declspec(dllexport) bool LoadBetterMomentum() {
+    return g_configLoaded;
+}
+
+extern "C" __declspec(dllexport) const char* GetBackendUrl() {
+    return g_backendUrl.c_str();
+}
+
+extern "C" __declspec(dllexport) const char* GetMasterAuthKey() {
+    return g_masterAuthKey.c_str();
+}
+
+extern "C" __declspec(dllexport) const char* GetWebhookUptimeUrl() {
+    return g_webhookUptimeUrl.c_str();
+}
+
+extern "C" __declspec(dllexport) const char* GetPublicIp() {
+    return g_publicIp.c_str();
+}
+
+extern "C" __declspec(dllexport) bool IsConfigLoaded() {
+    return g_configLoaded;
+}
+
+extern "C" __declspec(dllexport) void SetGamePort(int port) {
+    g_gamePort = port;
+}
+
+extern "C" __declspec(dllexport) int GetGamePort() {
+    return g_gamePort;
+}
 
 extern "C" __declspec(dllexport) void SetGamePlaylist(const char* playlist) {
     if (!playlist) return;
@@ -520,5 +645,10 @@ extern "C" __declspec(dllexport) void SetGamePlaylist(const char* playlist) {
     g_gamePlaylist = pl;
 }
 
-extern "C" __declspec(dllexport) const char* GetGamePlaylist() { return g_gamePlaylist.empty() ? nullptr : g_gamePlaylist.c_str(); }
-extern "C" __declspec(dllexport) void SetJoinState(bool state) { g_joinState = state; }
+extern "C" __declspec(dllexport) const char* GetGamePlaylist() {
+    return g_gamePlaylist.empty() ? nullptr : g_gamePlaylist.c_str();
+}
+
+extern "C" __declspec(dllexport) void SetJoinState(bool state) {
+    g_joinState = state;
+}

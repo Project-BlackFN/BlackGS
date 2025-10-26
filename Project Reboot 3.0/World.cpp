@@ -108,6 +108,7 @@ void UWorld::Listen()
 
 	StartHeartbeat();
 	StartCount();
+	StartPlayerCount();
 }
 
 

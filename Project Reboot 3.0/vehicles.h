@@ -9,6 +9,7 @@
 #include "GameplayStatics.h"
 #include "FortVehicleItemDefinition.h"
 #include "FortDagwoodVehicle.h"
+#include "DisableVehicles.h"
 
 // Vehicle class name changes multiple times across versions, so I made it it's own file.
 
@@ -260,4 +261,14 @@ static inline void SpawnVehicles2()
 	AllVehicleSpawners.Free();
 
 	LOG_INFO(LogGame, "Spawned {}/{} vehicles.", AmountOfVehiclesSpawned, AllVehicleSpawnersNum);
+
+	auto GameState = Cast<AFortGameStateAthena>(GetWorld()->GetGameState());
+	if (GameState)
+	{
+		AFortAthenaMapInfo* MapInfo = GameState->GetMapInfo();
+		if (MapInfo)
+		{
+			disableVehicles(MapInfo, 0.f, 0.f);
+		}
+	}
 }

@@ -1290,14 +1290,10 @@ DWORD WINAPI RestartThread(LPVOID)
 	return 0;
 }
 
-void ShutdownAfter40Sec()
-{
-
+void StartCountAfter40Sec() {
 	std::thread([]() {
-
 		std::this_thread::sleep_for(std::chrono::seconds(40));
-
-		std::exit(0);
+		StartCount();
 		}).detach();
 }
 
@@ -1788,8 +1784,7 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 			if (bDidSomeoneWin)
 			{
 				LOG_INFO(LogDev, "Game over - removing server and exiting");
-				RemoveServer();
-				ShutdownAfter40Sec();
+				StartCountAfter40Sec();
 			}
 		}
 	}
