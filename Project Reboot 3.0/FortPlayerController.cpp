@@ -1321,6 +1321,15 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 		return ClientOnPawnDiedOriginal(PlayerController, DeathReport);
 	}
 
+	if (KillerPlayerState || DeadPlayerState)
+	{
+		std::string attacker = KillerPlayerState ? KillerPlayerState->GetPlayerName().ToString() : "Unknown";
+		std::string victim = DeadPlayerState ? DeadPlayerState->GetPlayerName().ToString() : "Unknown";
+
+		LOG_INFO(LogDev, "Attacker: {}", attacker);
+		LOG_INFO(LogDev, "Victim: {}", victim);
+	}
+
 	auto DeathLocation = DeadPawn->GetActorLocation();
 	LOG_INFO(LogDev, "DeathLocation: X={}, Y={}, Z={}", DeathLocation.X, DeathLocation.Y, DeathLocation.Z);
 
