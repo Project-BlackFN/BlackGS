@@ -1277,7 +1277,7 @@ DWORD WINAPI RestartThread(LPVOID)
 
 	bIsInAutoRestart = true;
 
-	float SecondsBeforeRestart = 10;
+	float SecondsBeforeRestart = 61;
 	Sleep(SecondsBeforeRestart * 1000);
 
 	LOG_INFO(LogDev, "Auto restarting!");
@@ -1652,37 +1652,17 @@ void AFortPlayerController::ClientOnPawnDiedHook(AFortPlayerController* PlayerCo
 			PlayerController->GetStateName() = UKismetStringLibrary::Conv_StringToName(L"Spectating");
 		}
 
-		if (IsRestartingSupported() && Globals::bAutoRestart && !bIsInAutoRestart)
+		if (IsRestartingSupported() && Globals::bAutoRestart && !bIsInAutoRestart && GameState)
 		{
-			// wht
-
-			if (GameState->GetGamePhase() > EAthenaGamePhase::Warmup)
+			if (GameState->GetGamePhase() == EAthenaGamePhase::EndGame)
 			{
-				auto AllPlayerStates = UGameplayStatics::GetAllActorsOfClass(GetWorld(), AFortPlayerStateAthena::StaticClass());
+				bIsInAutoRestart = true;
 
-				bool bDidSomeoneWin = AllPlayerStates.Num() == 0;
+				SetJoinState(true);
+				StopHeartbeat();
+				RemoveServer();
 
-				for (int i = 0; i < AllPlayerStates.Num(); ++i)
-				{
-					auto CurrentPlayerState = (AFortPlayerStateAthena*)AllPlayerStates.at(i);
-
-					if (CurrentPlayerState->GetPlace() <= 1)
-					{
-						bDidSomeoneWin = true;
-						break;
-					}
-				}
-
-				// LOG_INFO(LogDev, "bDidSomeoneWin: {}", bDidSomeoneWin);
-
-				// if (GameState->GetGamePhase() == EAthenaGamePhase::EndGame)
-				if (bDidSomeoneWin)
-				{
-					SetJoinState(true);
-					StopHeartbeat();
-					RemoveServer();
-					CreateThread(0, 0, RestartThread, 0, 0, 0);
-				}
+				CreateThread(0, 0, RestartThread, 0, 0, 0);
 			}
 		}
 	}
