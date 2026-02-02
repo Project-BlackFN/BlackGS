@@ -20,7 +20,6 @@
 #include "discord.h"
 #include "BuildingGameplayActorSpawnMachine.h"
 #include "BP_IslandScripting.h"
-#include "BetterMomentum.h"
 
 #include "vehicles.h"
 #include "globals.h"
@@ -38,6 +37,7 @@
 #include <random>
 #include "TSubclassOf.h"
 #include "FortAthenaSupplyDrop.h"
+#include "BetterMomentum.h"
 
 static UFortPlaylistAthena* GetPlaylistToUse()
 {
@@ -102,7 +102,7 @@ FName AFortGameModeAthena::RedirectLootTier(const FName& LootTier)
 
 		if (LootTier == Loot_AmmoFName)
 			return UKismetStringLibrary::Conv_StringToName(L"Loot_AthenaAmmoLarge");
-		
+
 		return LootTier;
 	}
 
@@ -129,8 +129,8 @@ UClass* AFortGameModeAthena::GetVehicleClassOverride(UClass* DefaultClass)
 	if (!GetVehicleClassOverrideFn)
 		return DefaultClass;
 
-	struct { UClass* DefaultClass; UClass* ReturnValue; } GetVehicleClassOverride_Params{DefaultClass};
-	
+	struct { UClass* DefaultClass; UClass* ReturnValue; } GetVehicleClassOverride_Params{ DefaultClass };
+
 	this->ProcessEvent(GetVehicleClassOverrideFn, &GetVehicleClassOverride_Params);
 
 	return GetVehicleClassOverride_Params.ReturnValue;
@@ -145,7 +145,7 @@ void AFortGameModeAthena::SkipAircraft()
 	static auto bGameModeWillSkipAircraftOffset = GameState->GetOffset("bGameModeWillSkipAircraft", false);
 
 	if (bGameModeWillSkipAircraftOffset != -1) // hmm?
-		GameState->Get<bool>(bGameModeWillSkipAircraftOffset) = true; 
+		GameState->Get<bool>(bGameModeWillSkipAircraftOffset) = true;
 
 	static auto OnAircraftExitedDropZoneFn = FindObject<UFunction>(L"/Script/FortniteGame.FortGameModeAthena.OnAircraftExitedDropZone");
 
@@ -182,36 +182,27 @@ void AFortGameModeAthena::HandleSpawnRateForActorClass(UClass* ActorClass, float
 
 void AFortGameModeAthena::StartAircraftPhase()
 {
-	if (Addresses::StartAircraftPhase 
+	if (Addresses::StartAircraftPhase
 		&& Fortnite_Version < 24 // ig they load or sometrhing gg
-		) 
+		)
 	{
 		static void (*StartAircraftPhaseOriginal)(AFortGameModeAthena*, bool bDoNotSpawnAircraft) = decltype(StartAircraftPhaseOriginal)(Addresses::StartAircraftPhase);
 		StartAircraftPhaseOriginal(this, false); // love the double negative Fortnite
 		SetJoinState(false);
-		StopHeartbeat();
-		SendHeartbeat();
-		StartHeartbeat();
 		StopCount();
+		StopPlayerCount();
 	}
 	else
 	{
 		UKismetSystemLibrary::ExecuteConsoleCommand(GetWorld(), L"startaircraft", nullptr);
 		SetJoinState(false);
-		StopHeartbeat();
-		SendHeartbeat();
-		StartHeartbeat();
 		StopCount();
+		StopPlayerCount();
 	}
 }
 
 void AFortGameModeAthena::OverrideBattleBus(AFortGameStateAthena* GameState, UObject* OverrideBattleBusSkin)
 {
-	SetJoinState(false);
-	StopHeartbeat();
-	SendHeartbeat();
-	StartHeartbeat();
-	StopCount();
 	if (!OverrideBattleBusSkin)
 	{
 		LOG_WARN(LogGame, "OverrideBattleBus not found! Equipping default battle bus.");
@@ -332,7 +323,6 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 {
 	Globals::bHitReadyToStartMatch = true;
 
-
 	auto GameState = GameMode->GetGameStateAthena();
 
 	auto SetPlaylist = [&GameState, &GameMode](UObject* Playlist, bool bOnRep) -> void {
@@ -377,7 +367,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 
 		if (bOnRep)
 			GameState->OnRep_CurrentPlaylistInfo();
-	};
+		};
 
 	/* auto& LocalPlayers = GetLocalPlayers();
 
@@ -570,7 +560,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 							auto LevelNameWStr = std::wstring(LevelNameStr.begin(), LevelNameStr.end());
 
 							GameState->AddToAdditionalPlaylistLevelsStreamed(LevelFName, true);
-						} 
+						}
 					}
 
 					LOG_INFO(LogPlaylist, "Loading {} playlist levels.", AdditionalLevels.Num());
@@ -763,7 +753,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 			return false;
 		}
 	}
-	
+
 	// I don't think this map info check is proper.. We can loop through the Actors in the World's PersistentLevel and check if there is a MapInfo, if there is then we can wait, else don't.
 
 	auto MapInfo = GameState->GetMapInfo();
@@ -824,12 +814,12 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 		GameSession->Get<int>(MaxPlayersOffset) = 100;
 
 		GameState->OnRep_CurrentPlaylistInfo(); // ?
-		
+
 		// Calendar::SetSnow(1000);
 
 		static auto bAlwaysDBNOOffset = GameMode->GetOffset("bAlwaysDBNO");
 		// GameMode->Get<bool>(bAlwaysDBNOOffset) = true;
-		
+
 		static auto GameState_AirCraftBehaviorOffset = GameState->GetOffset("AirCraftBehavior", false);
 
 		if (GameState_AirCraftBehaviorOffset != -1)
@@ -884,7 +874,7 @@ bool AFortGameModeAthena::Athena_ReadyToStartMatchHook(AFortGameModeAthena* Game
 				else
 				{
 					auto S19Patch = Memcury::Scanner::FindPattern("74 1A 48 8D 97 ? ? ? ? 49 8B CF E8 ? ? ? ? 88 87 ? ? ? ? E9", false).Get();
-					
+
 					if (S19Patch)
 					{
 						PatchByte(S19Patch, 0x75);
@@ -1296,11 +1286,6 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 			GameMode->Get<float>(WarmupEarlyCountdownDurationOffset) = EarlyDuration;
 
 			LOG_INFO(LogDev, "Auto starting bus in {}.", AutoBusStartSeconds);
-			SetJoinState(false);
-			StopHeartbeat();
-			SendHeartbeat();
-			StartHeartbeat();
-			StopCount();
 		}
 	}
 
@@ -1360,18 +1345,18 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 			{
 				OverrideBattleBusSkin = FindObject(L"/Game/Athena/Items/Cosmetics/BattleBuses/BBID_WorldCupBus.BBID_WorldCupBus"); // World Cup
 			}
-			else if (Fortnite_Version == 14.30) 
+			else if (Fortnite_Version == 14.30)
 			{
 				OverrideBattleBusSkin = FindObject(L"/Game/Athena/Items/Cosmetics/BattleBuses/BBID_BusUpgrade1.BBID_BusUpgrade1");
 			}
-			else if (Fortnite_Version == 14.50) 
+			else if (Fortnite_Version == 14.50)
 			{
 				OverrideBattleBusSkin = FindObject(L"/Game/Athena/Items/Cosmetics/BattleBuses/BBID_BusUpgrade2.BBID_BusUpgrade2");
 			}
-			else if (Fortnite_Version == 14.60) 
+			else if (Fortnite_Version == 14.60)
 			{
 				OverrideBattleBusSkin = FindObject(L"/Game/Athena/Items/Cosmetics/BattleBuses/BBID_BusUpgrade3.BBID_BusUpgrade3");
-			}			
+			}
 
 			if (OverrideBattleBusSkin)
 				OverrideBattleBus(GameState, OverrideBattleBusSkin);
@@ -1695,7 +1680,7 @@ void AFortGameModeAthena::Athena_HandleStartingNewPlayerHook(AFortGameModeAthena
 		{
 			static auto AllPortalsOffset = CreativePortalManager->GetOffset("AllPortals");
 			auto& AllPortals = CreativePortalManager->Get<TArray<AFortAthenaCreativePortal*>>(AllPortalsOffset);
-		
+
 			for (int i = 0; i < AllPortals.size(); i++)
 			{
 				auto CurrentPortal = AllPortals.at(i);

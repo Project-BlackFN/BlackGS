@@ -35,6 +35,9 @@ std::atomic<bool> g_stopHeartbeat{ false };
 std::thread g_countThread;
 std::atomic<bool> g_countRunning{ false };
 std::atomic<bool> g_stopCount{ false };
+std::thread g_playerCountThread;
+std::atomic<bool> g_playerCountRunning{ false };
+std::atomic<bool> g_stopPlayerCount{ false };
 
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     ((std::string*)userp)->append((char*)contents, size * nmemb);
@@ -118,95 +121,213 @@ std::string ParseServerList(const std::string& jsonResponse) {
 }
 
 void HeartbeatWorker() {
-    while (!g_stopHeartbeat.load()) {
-        for (int i = 0; i < 450 && !g_stopHeartbeat.load(); ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    constexpr int SLEEP_INTERVALS = 450;
+    constexpr int SLEEP_MS = 100;
+
+    while (!g_stopHeartbeat.load(std::memory_order_acquire)) {
+        auto start = std::chrono::steady_clock::now();
+        auto end = start + std::chrono::milliseconds(SLEEP_INTERVALS * SLEEP_MS);
+
+        while (std::chrono::steady_clock::now() < end) {
+            if (g_stopHeartbeat.load(std::memory_order_acquire)) {
+                g_heartbeatRunning.store(false, std::memory_order_release);
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
 
-        if (!g_stopHeartbeat.load()) {
-            SendHeartbeat();
-        }
+        SendHeartbeat();
     }
-    g_heartbeatRunning.store(false);
+    g_heartbeatRunning.store(false, std::memory_order_release);
 }
 
-
-
 void CountWorker() {
-    auto zeroPlayerStart = std::chrono::steady_clock::time_point{};
+    constexpr int CHECK_INTERVAL_SEC = 15;
+    constexpr int PHASE_ENDED = 5;
+    constexpr int PHASE_INGAME = 2;
 
-    while (!g_stopCount.load()) {
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-        if (g_stopCount.load()) break;
+    AFortGameStateAthena* gameState = nullptr;
+    UWorld* world = nullptr;
 
-        AFortGameStateAthena* gameState = nullptr;
-        if (auto world = GetWorld()) {
-            gameState = Cast<AFortGameStateAthena>(world->GetGameState());
+    while (!g_stopCount.load(std::memory_order_acquire)) {
+        auto start = std::chrono::steady_clock::now();
+        auto end = start + std::chrono::seconds(CHECK_INTERVAL_SEC);
+
+        while (std::chrono::steady_clock::now() < end) {
+            if (g_stopCount.load(std::memory_order_acquire)) {
+                g_countRunning.store(false, std::memory_order_release);
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
 
-        if (!gameState) continue;
+        if (!world) {
+            world = GetWorld();
+            if (!world) continue;
+        }
+
+        gameState = Cast<AFortGameStateAthena>(world->GetGameState());
+        if (!gameState) {
+            world = nullptr;
+            continue;
+        }
+
+        int phase = static_cast<int>(gameState->GetGamePhase());
+        std::cout << "Game Phase: " << phase << std::endl;
+
+        if (phase == 5) {
+            RemoveServer();
+            g_countRunning.store(false, std::memory_order_release);
+            std::exit(0);
+        }
+
+        if (phase == 4) {
+            StopCount();
+            break;
+        }
+    }
+
+    g_countRunning.store(false, std::memory_order_release);
+}
+
+void PlayerCountWorker() {
+    constexpr int CHECK_INTERVAL_SEC = 8;
+
+    AFortGameStateAthena* gameState = nullptr;
+    UWorld* world = nullptr;
+    int consecutiveZeroCount = 0;
+    constexpr int ZERO_THRESHOLD = 3;
+
+    while (!g_stopPlayerCount.load(std::memory_order_relaxed)) {
+        auto start = std::chrono::steady_clock::now();
+        auto end = start + std::chrono::seconds(CHECK_INTERVAL_SEC);
+
+        while (std::chrono::steady_clock::now() < end) {
+            if (g_stopPlayerCount.load(std::memory_order_relaxed)) {
+                g_playerCountRunning.store(false, std::memory_order_release);
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+
+        if (!world) {
+            world = GetWorld();
+            if (!world) continue;
+        }
+
+        gameState = Cast<AFortGameStateAthena>(world->GetGameState());
+        if (!gameState) {
+            world = nullptr;
+            continue;
+        }
 
         int players = gameState->GetPlayersLeft();
-
-        if (players == 100) {
-            StopCount();
-            SetJoinState(false);
-        }
+        std::cout << "Players Left: " << players << std::endl;
 
         if (players == 0) {
-            if (zeroPlayerStart == std::chrono::steady_clock::time_point{}) {
-                zeroPlayerStart = std::chrono::steady_clock::now();
-            }
-            else {
-                auto elapsed = std::chrono::steady_clock::now() - zeroPlayerStart;
-                if (elapsed >= std::chrono::minutes(3)) {
-                    std::exit(0);
-                }
+            ++consecutiveZeroCount;
+            if (consecutiveZeroCount >= ZERO_THRESHOLD) {
+                std::cout << "No players left for " << ZERO_THRESHOLD << " checks, shutting down server..." << std::endl;
+                RemoveServer();
+                g_playerCountRunning.store(false, std::memory_order_release);
+                std::exit(0);
             }
         }
         else {
-            zeroPlayerStart = std::chrono::steady_clock::time_point{};
+            consecutiveZeroCount = 0;
         }
     }
 
-    g_countRunning.store(false);
+    g_playerCountRunning.store(false, std::memory_order_release);
 }
 
-
 extern "C" __declspec(dllexport) bool StartCount() {
-    if (g_countRunning.load()) {
+    bool expected = false;
+    if (!g_countRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         StopCount();
+        g_countRunning.store(true, std::memory_order_release);
     }
-    g_stopCount.store(false);
-    g_countRunning.store(true);
+
+    g_stopCount.store(false, std::memory_order_release);
 
     try {
+        if (g_countThread.joinable()) {
+            g_countThread.join();
+        }
         g_countThread = std::thread(CountWorker);
         g_countThread.detach();
         return true;
     }
-    catch (...) {
-        g_countRunning.store(false);
+    catch (const std::exception& e) {
+        g_countRunning.store(false, std::memory_order_release);
+        std::cerr << "StartCount failed: " << e.what() << std::endl;
         return false;
     }
 }
 
 extern "C" __declspec(dllexport) void StopCount() {
-    if (g_countRunning.load()) {
-        g_stopCount.store(true);
-        int timeout = 10;
-        while (g_countRunning.load() && timeout > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            timeout--;
-        }
+    if (!g_countRunning.load(std::memory_order_acquire)) {
+        return;
     }
+
+    g_stopCount.store(true, std::memory_order_release);
+
+    constexpr int MAX_WAIT_MS = 1000;
+    constexpr int CHECK_INTERVAL_MS = 50;
+
+    for (int elapsed = 0; elapsed < MAX_WAIT_MS && g_countRunning.load(std::memory_order_acquire); elapsed += CHECK_INTERVAL_MS) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_INTERVAL_MS));
+    }
+}
+
+extern "C" __declspec(dllexport) bool StartPlayerCount() {
+    bool expected = false;
+    if (!g_playerCountRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        StopPlayerCount();
+        g_playerCountRunning.store(true, std::memory_order_release);
+    }
+
+    g_stopPlayerCount.store(false, std::memory_order_release);
+
+    try {
+        if (g_playerCountThread.joinable()) {
+            g_playerCountThread.join();
+        }
+        g_playerCountThread = std::thread(PlayerCountWorker);
+        g_playerCountThread.detach();
+        return true;
+    }
+    catch (const std::exception& e) {
+        g_playerCountRunning.store(false, std::memory_order_release);
+        std::cerr << "StartPlayerCount failed: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+extern "C" __declspec(dllexport) void StopPlayerCount() {
+    if (!g_playerCountRunning.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    g_stopPlayerCount.store(true, std::memory_order_release);
+
+    constexpr int MAX_WAIT_MS = 1000;
+    constexpr int CHECK_INTERVAL_MS = 50;
+
+    for (int elapsed = 0; elapsed < MAX_WAIT_MS && g_playerCountRunning.load(std::memory_order_relaxed); elapsed += CHECK_INTERVAL_MS) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_INTERVAL_MS));
+    }
+}
+
+extern "C" __declspec(dllexport) bool IsPlayerCountRunning() {
+    return g_playerCountRunning.load(std::memory_order_relaxed);
 }
 
 extern "C" __declspec(dllexport) int GetAvaPort() {
     static std::string serverList;
     serverList.clear();
 
-    if (!g_configLoaded) { // useless but idk why I added it
+    if (!g_configLoaded) {
         return 7777;
     }
 
@@ -261,7 +382,7 @@ extern "C" __declspec(dllexport) int GetAvaPort() {
         }
     }
 
-    return highestPort + 3; // just for space it's clear but u can remove it
+    return highestPort + 3;
 }
 
 extern "C" __declspec(dllexport) bool RegisterServer() {
@@ -380,40 +501,47 @@ extern "C" __declspec(dllexport) bool SendHeartbeat() {
 }
 
 extern "C" __declspec(dllexport) bool StartHeartbeat() {
-    if (g_heartbeatRunning.load()) {
-        StopHeartbeat();
-    }
-
     if (!g_serverRegistered || g_serverSecretKey.empty() || !g_configLoaded) {
         return false;
     }
 
-    g_stopHeartbeat.store(false);
-    g_heartbeatRunning.store(true);
+    bool expected = false;
+    if (!g_heartbeatRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        StopHeartbeat();
+        g_heartbeatRunning.store(true, std::memory_order_release);
+    }
+
+    g_stopHeartbeat.store(false, std::memory_order_release);
 
     try {
+        if (g_heartbeatThread.joinable()) {
+            g_heartbeatThread.join();
+        }
         g_heartbeatThread = std::thread(HeartbeatWorker);
         g_heartbeatThread.detach();
         return true;
     }
-    catch (...) {
-        g_heartbeatRunning.store(false);
+    catch (const std::exception& e) {
+        g_heartbeatRunning.store(false, std::memory_order_release);
+        std::cerr << "StartHeartbeat failed: " << e.what() << std::endl;
         return false;
     }
 }
 
 extern "C" __declspec(dllexport) void StopHeartbeat() {
-    if (g_heartbeatRunning.load()) {
-        g_stopHeartbeat.store(true);
+    if (!g_heartbeatRunning.load(std::memory_order_acquire)) {
+        return;
+    }
 
-        int timeout = 10;
-        while (g_heartbeatRunning.load() && timeout > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            timeout--;
-        }
+    g_stopHeartbeat.store(true, std::memory_order_release);
+
+    constexpr int MAX_WAIT_MS = 1000;
+    constexpr int CHECK_INTERVAL_MS = 50;
+
+    for (int elapsed = 0; elapsed < MAX_WAIT_MS && g_heartbeatRunning.load(std::memory_order_acquire); elapsed += CHECK_INTERVAL_MS) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_INTERVAL_MS));
     }
 }
-
 
 extern "C" __declspec(dllexport) const char* GetRequiredPlaylist() {
     static std::string cachedGamemode;
@@ -466,17 +594,45 @@ extern "C" __declspec(dllexport) bool IsHeartbeatRunning() {
     return g_heartbeatRunning.load();
 }
 
-extern "C" __declspec(dllexport) const char* GetServerSecretKey() { return g_serverSecretKey.empty() ? nullptr : g_serverSecretKey.c_str(); }
-extern "C" __declspec(dllexport) const char* GetServerId() { return g_serverId.empty() ? nullptr : g_serverId.c_str(); }
-extern "C" __declspec(dllexport) bool LoadBetterMomentum() { return g_configLoaded; }
-extern "C" __declspec(dllexport) const char* GetBackendUrl() { return g_backendUrl.c_str(); }
-extern "C" __declspec(dllexport) const char* GetMasterAuthKey() { return g_masterAuthKey.c_str(); }
-extern "C" __declspec(dllexport) const char* GetWebhookUptimeUrl() { return g_webhookUptimeUrl.c_str(); }
-extern "C" __declspec(dllexport) const char* GetPublicIp() { return g_publicIp.c_str(); }
-extern "C" __declspec(dllexport) bool IsConfigLoaded() { return g_configLoaded; }
+extern "C" __declspec(dllexport) const char* GetServerSecretKey() {
+    return g_serverSecretKey.empty() ? nullptr : g_serverSecretKey.c_str();
+}
 
-extern "C" __declspec(dllexport) void SetGamePort(int port) { g_gamePort = port; }
-extern "C" __declspec(dllexport) int GetGamePort() { return g_gamePort; }
+extern "C" __declspec(dllexport) const char* GetServerId() {
+    return g_serverId.empty() ? nullptr : g_serverId.c_str();
+}
+
+extern "C" __declspec(dllexport) bool LoadBetterMomentum() {
+    return g_configLoaded;
+}
+
+extern "C" __declspec(dllexport) const char* GetBackendUrl() {
+    return g_backendUrl.c_str();
+}
+
+extern "C" __declspec(dllexport) const char* GetMasterAuthKey() {
+    return g_masterAuthKey.c_str();
+}
+
+extern "C" __declspec(dllexport) const char* GetWebhookUptimeUrl() {
+    return g_webhookUptimeUrl.c_str();
+}
+
+extern "C" __declspec(dllexport) const char* GetPublicIp() {
+    return g_publicIp.c_str();
+}
+
+extern "C" __declspec(dllexport) bool IsConfigLoaded() {
+    return g_configLoaded;
+}
+
+extern "C" __declspec(dllexport) void SetGamePort(int port) {
+    g_gamePort = port;
+}
+
+extern "C" __declspec(dllexport) int GetGamePort() {
+    return g_gamePort;
+}
 
 extern "C" __declspec(dllexport) void SetGamePlaylist(const char* playlist) {
     if (!playlist) return;
@@ -489,5 +645,10 @@ extern "C" __declspec(dllexport) void SetGamePlaylist(const char* playlist) {
     g_gamePlaylist = pl;
 }
 
-extern "C" __declspec(dllexport) const char* GetGamePlaylist() { return g_gamePlaylist.empty() ? nullptr : g_gamePlaylist.c_str(); }
-extern "C" __declspec(dllexport) void SetJoinState(bool state) { g_joinState = state; }
+extern "C" __declspec(dllexport) const char* GetGamePlaylist() {
+    return g_gamePlaylist.empty() ? nullptr : g_gamePlaylist.c_str();
+}
+
+extern "C" __declspec(dllexport) void SetJoinState(bool state) {
+    g_joinState = state;
+}

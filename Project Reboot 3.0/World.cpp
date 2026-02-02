@@ -106,9 +106,10 @@ void UWorld::Listen()
 
 	RegisterServer();
 
-	SendHeartbeat();
 	StartHeartbeat();
 	StartCount();
+	SetJoinState(true);
+	StartPlayerCount();
 }
 
 
