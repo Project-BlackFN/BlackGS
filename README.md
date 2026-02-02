@@ -48,4 +48,4 @@ inline std::string PUBLIC_IP = "PUBLIC IP OF GS";
 
 # ISSUES
 
-**If you have any Problem with the Gameserver or have a solution to a Code Logic Error feel free to write me on Discord (real.ghost143)**
+**If you have any Problem with the Gameserver or have a solution to a Code Logic Error feel free to write me on Discord (5xghost143)**
