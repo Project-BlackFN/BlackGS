@@ -27,6 +27,7 @@ bool AActor::IsTearOff()
 int32& AActor::GetNetTag()
 {
 	static auto NetTagOffset = GetOffset("NetTag");
+	
 	return Get<int32>(NetTagOffset);
 }
 
