@@ -1277,7 +1277,7 @@ DWORD WINAPI RestartThread(LPVOID)
 
 	bIsInAutoRestart = true;
 
-	float SecondsBeforeRestart = 10;
+	float SecondsBeforeRestart = 40;
 	Sleep(SecondsBeforeRestart * 1000);
 
 	LOG_INFO(LogDev, "Auto restarting!");
